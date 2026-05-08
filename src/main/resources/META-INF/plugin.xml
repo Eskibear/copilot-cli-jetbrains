@@ -32,5 +32,11 @@
                 description="Open the GitHub Copilot CLI in the integrated terminal. Installs it if missing.">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
+        <action id="CopilotCli.RenameTab"
+                class="io.github.eskibear.copilotcli.RenameCopilotCliTabAction"
+                text="Rename..."
+                description="Rename this terminal tab.">
+            <add-to-group group-id="EditorTabPopupMenu" anchor="first"/>
+        </action>
     </actions>
 </idea-plugin>
