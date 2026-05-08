@@ -5,15 +5,13 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.PlatformDataKeys
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.runWriteAction
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.ui.InputValidatorEx
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapi.vfs.VirtualFileManager
-import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent
 import com.intellij.testFramework.LightVirtualFile
 
 private val LOG = logger<RenameCopilotCliTabAction>()
@@ -29,9 +27,10 @@ private const val TERMINAL_VIEW_FILE_TYPE_NAME = "Terminal View"
  *    class is `internal` to the terminal plugin, so we cannot reference it directly; we
  *    detect it by file type name (`Terminal View`).
  *  - `LightVirtualFileBase.rename` only updates the in-memory name field and does NOT fire any
- *    VFS event, so the editor tab title would not refresh. We therefore wrap the rename in a
- *    manually published `VFilePropertyChangeEvent(PROP_NAME, ...)`, which is the same pattern
- *    used by the platform's `moveContentBackToTab` helper.
+ *    VFS event, so the editor tab title would not refresh on its own. We therefore call
+ *    [FileEditorManager.updateFilePresentation] right after the rename. (We previously
+ *    published a `VFilePropertyChangeEvent` manually but its constructors are deprecated /
+ *    `@ApiStatus.Internal`, which the JetBrains Marketplace verifier flags.)
  */
 class RenameCopilotCliTabAction : AnAction(), DumbAware {
 
@@ -68,21 +67,12 @@ class RenameCopilotCliTabAction : AnAction(), DumbAware {
         if (input.isNullOrEmpty() || input == oldName) return
 
         try {
-            renameLightVirtualFile(file, oldName, input)
+            runWriteAction {
+                file.rename(this, input)
+            }
+            FileEditorManager.getInstance(project).updateFilePresentation(file)
         } catch (t: Throwable) {
             LOG.warn("Failed to rename terminal tab to '$input'", t)
-        }
-    }
-
-    private fun renameLightVirtualFile(file: LightVirtualFile, oldName: String, newName: String) {
-        val app = ApplicationManager.getApplication()
-        runWriteAction {
-            val event = VFilePropertyChangeEvent(this, file, VirtualFile.PROP_NAME, oldName, newName)
-            val publisher = app.messageBus.syncPublisher(VirtualFileManager.VFS_CHANGES)
-            val events = listOf(event)
-            publisher.before(events)
-            file.rename(this, newName)
-            publisher.after(events)
         }
     }
 
