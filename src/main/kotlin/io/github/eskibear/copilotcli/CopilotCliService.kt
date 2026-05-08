@@ -17,11 +17,11 @@ private val LOG = logger<CopilotCliService>()
  *  1. `PathEnvironmentVariableUtil.findInPath` — checks the IDE process PATH (with PATHEXT
  *     handling on Windows). This works for the common "system-wide install" case and for
  *     anything in the IDE's login-shell PATH on macOS/Linux.
- *  2. Well-known npm-global locations — covers the case where the user installed via
- *     `npm install -g @github/copilot` but the IDE's PATH does not include the npm-global bin.
- *     This is common when:
- *       - On Windows, the package was installed AFTER the IDE was started, so the IDE process
- *         env is stale.
+ *  2. Well-known npm-global / winget locations — covers the case where the user installed
+ *     `copilot` (via `npm install -g @github/copilot` or `winget install GitHub.Copilot`) but
+ *     the IDE's PATH does not include the install location. This is common when:
+ *       - On Windows, the package was installed AFTER the IDE was started, so the IDE's
+ *         process env block is stale (Windows env updates require a process restart).
  *       - On macOS/Linux, the user manages Node via nvm/fnm/volta which usually only adjusts
  *         PATH inside interactive shells (~/.bashrc, ~/.zshrc). The integrated terminal (which
  *         IS interactive) sees the binary, but the IDE process does not.
@@ -56,6 +56,23 @@ object CopilotCliService {
                 candidates += File(npmDir, "copilot.ps1")
                 candidates += File(npmDir, "copilot.bat")
                 candidates += File(npmDir, "copilot.exe")
+            }
+            // winget portable install. winget normally writes a shim into WinGet\Links
+            // (user or machine scope) and adds that directory to PATH. The actual binary
+            // lives under WinGet\Packages\<package id>\. Both can be missed if the IDE
+            // was started before the install (Windows process env block is stale).
+            val localAppData = System.getenv("LOCALAPPDATA")
+            if (localAppData != null) {
+                val wingetDir = File("$localAppData\\Microsoft\\WinGet")
+                candidates += File(wingetDir, "Links\\copilot.exe")
+                val packagesDir = File(wingetDir, "Packages")
+                if (packagesDir.isDirectory) {
+                    packagesDir.listFiles { f -> f.isDirectory && f.name.startsWith("GitHub.Copilot", ignoreCase = true) }
+                        ?.forEach { pkgDir -> candidates += File(pkgDir, "copilot.exe") }
+                }
+            }
+            System.getenv("PROGRAMFILES")?.let {
+                candidates += File("$it\\WinGet\\Links\\copilot.exe")
             }
             // Some Node installations (Volta, fnm, scoop) put shims elsewhere.
             System.getenv("VOLTA_HOME")?.let { candidates += File("$it\\bin\\copilot.cmd") }
