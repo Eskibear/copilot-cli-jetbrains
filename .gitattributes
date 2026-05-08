@@ -1,0 +1,6 @@
+# Ensure shell scripts always use LF, even on Windows checkouts.
+gradlew text eol=lf
+*.sh    text eol=lf
+
+# Gradle wrapper jar is binary.
+*.jar binary

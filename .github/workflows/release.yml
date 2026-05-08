@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure gradlew is executable
+        run: chmod +x ./gradlew
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          # Strip leading "v" if present (v1.2.3 -> 1.2.3).
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $VERSION"
+
+      - name: Build plugin
+        run: ./gradlew --no-daemon -Pversion=${{ steps.version.outputs.version }} buildPlugin
+
+      - name: Locate distribution
+        id: dist
+        run: |
+          ZIP=$(ls build/distributions/*.zip | head -n 1)
+          echo "path=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Distribution: $ZIP"
+
+      - name: Upload distribution to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "${{ steps.dist.outputs.path }}" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Publish to JetBrains Marketplace
+        if: env.PUBLISH_TOKEN != ''
+        run: ./gradlew --no-daemon -Pversion=${{ steps.version.outputs.version }} publishPlugin
