@@ -14,9 +14,9 @@ private val LOG = logger<CopilotCliService>()
  * install is picked up without restarting the IDE.
  *
  * Detection strategy (each step is cheap and runs on EDT):
- *  1. `PathEnvironmentVariableUtil.findInPath` — checks the IDE process PATH (with PATHEXT
- *     handling on Windows). This works for the common "system-wide install" case and for
- *     anything in the IDE's login-shell PATH on macOS/Linux.
+ *  1. [PathEnvironmentVariableUtil.findExecutableInPathOnAnyOS] — checks the shell PATH with
+ *     PATHEXT handling on Windows (`.exe`, `.cmd`, etc.). It reads the current shell PATH via
+ *     [com.intellij.util.EnvironmentUtil] so installs made after the IDE launched are detected.
  *  2. Well-known npm-global / winget locations — covers the case where the user installed
  *     `copilot` (via `npm install -g @github/copilot` or `winget install GitHub.Copilot`) but
  *     the IDE's PATH does not include the install location. This is common when:
@@ -31,7 +31,7 @@ object CopilotCliService {
     private const val EXECUTABLE_NAME = "copilot"
 
     fun isInstalled(): Boolean {
-        PathEnvironmentVariableUtil.findInPath(EXECUTABLE_NAME)?.let {
+        PathEnvironmentVariableUtil.findExecutableInPathOnAnyOS(EXECUTABLE_NAME)?.let {
             if (LOG.isDebugEnabled) LOG.debug("Found copilot via PATH at ${it.absolutePath}")
             return true
         }
