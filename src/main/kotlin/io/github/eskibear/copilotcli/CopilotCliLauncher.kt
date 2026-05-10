@@ -87,19 +87,24 @@ object CopilotCliLauncher {
                 // tool window has been initialized), the same session appeared in both the
                 // tool window panel and the editor area.
                 //
-                // deferSessionStartUntilUiShown(false) is required because without a tool
-                // window host, the "UI shown" event never fires and the shell process would
-                // never start.
+                // deferSessionStartUntilUiShown(false): without a tool window host, the
+                // "UI shown" event never fires and the shell process would never start.
+                //
+                // shellCommand: runs the command as the process directly instead of sending
+                // keystrokes to a shell. This is reliable because sendCommand requires the
+                // shell to be fully started, which is not guaranteed with a detached tab.
                 builder.shouldAddToToolWindow(false)
                     .requestFocus(false)
                     .deferSessionStartUntilUiShown(false)
+                    .shellCommand(listOf(command))
             }
 
             val tab = builder.createTab()
             if (openInEditor) {
                 openInEditorDirectly(project, tab)
+            } else {
+                sendCommand(tab.view, command)
             }
-            sendCommand(tab.view, command)
         } catch (t: Throwable) {
             LOG.warn("Failed to open integrated terminal for: $command", t)
             Messages.showErrorDialog(
