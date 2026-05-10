@@ -86,15 +86,20 @@ object CopilotCliLauncher {
                 // This avoids the duplication bug where, on first launch (before the Terminal
                 // tool window has been initialized), the same session appeared in both the
                 // tool window panel and the editor area.
+                //
+                // deferSessionStartUntilUiShown(false) is required because without a tool
+                // window host, the "UI shown" event never fires and the shell process would
+                // never start.
                 builder.shouldAddToToolWindow(false)
                     .requestFocus(false)
+                    .deferSessionStartUntilUiShown(false)
             }
 
             val tab = builder.createTab()
-            sendCommand(tab.view, command)
             if (openInEditor) {
                 openInEditorDirectly(project, tab)
             }
+            sendCommand(tab.view, command)
         } catch (t: Throwable) {
             LOG.warn("Failed to open integrated terminal for: $command", t)
             Messages.showErrorDialog(
