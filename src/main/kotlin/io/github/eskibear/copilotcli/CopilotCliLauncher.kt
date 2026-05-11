@@ -1,13 +1,20 @@
 package io.github.eskibear.copilotcli
 
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.ActionUiKind
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.PlatformDataKeys
+import com.intellij.openapi.actionSystem.ex.ActionUtil
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import com.intellij.terminal.frontend.view.TerminalView
-import com.intellij.testFramework.LightVirtualFile
 
 private val LOG = logger<CopilotCliLauncher>()
 
@@ -20,6 +27,9 @@ private val LOG = logger<CopilotCliLauncher>()
  */
 object CopilotCliLauncher {
 
+    private const val TERMINAL_TOOL_WINDOW_ID = "Terminal"
+    private const val MOVE_TERMINAL_TO_EDITOR_ACTION_ID = "Terminal.MoveToEditor"
+
     fun launchOrInstall(project: Project) {
         if (CopilotCliService.isInstalled()) {
             launch(project)
@@ -29,18 +39,12 @@ object CopilotCliLauncher {
     }
 
     private fun launch(project: Project) {
-        // Resolve the absolute path. shellCommand goes through ProcessBuilder, which on
-        // Windows does NOT honor PATHEXT for bare names: passing just "copilot" fails when
-        // only `copilot.cmd` (npm) or a well-known-location shim exists, even though the
-        // shell-typed approach handled both cases. Always pass the resolved absolute path.
-        val exe = CopilotCliService.findExecutable()
         runInTerminal(
             project,
             tabName = "Copilot CLI",
             command = "copilot",
             errorTitle = "Launch GitHub Copilot CLI",
             openInEditor = true,
-            processArgs = listOf(exe?.absolutePath ?: "copilot"),
         )
     }
 
@@ -72,39 +76,23 @@ object CopilotCliLauncher {
         command: String,
         errorTitle: String,
         openInEditor: Boolean,
-        processArgs: List<String> = listOf(command),
     ) {
         try {
-            val builder = TerminalToolWindowTabsManager.getInstance(project)
+            val tab = TerminalToolWindowTabsManager.getInstance(project)
                 .createTabBuilder()
                 .workingDirectory(project.basePath)
                 .tabName(tabName)
-
+                // Avoid requestFocus(true) when we plan to move the tab to the editor.
+                // requestFocus(true) triggers an async toolWindow.activate() call, which races
+                // with our moveTabToEditor logic. When the Terminal tool window has never been
+                // opened, the lazy-init callbacks from activation can re-show the tab in the
+                // tool window after we've already opened it in the editor, resulting in the
+                // same session appearing in both places.
+                .requestFocus(!openInEditor)
+                .createTab()
+            sendCommand(tab.view, command)
             if (openInEditor) {
-                // Create the tab without adding it to the Terminal tool window.
-                // This avoids the duplication bug where, on first launch (before the Terminal
-                // tool window has been initialized), the same session appeared in both the
-                // tool window panel and the editor area.
-                //
-                // deferSessionStartUntilUiShown(false): without a tool window host, the
-                // "UI shown" event never fires and the shell process would never start.
-                //
-                // shellCommand: runs the binary directly as the terminal process instead of
-                // typing keystrokes into a shell. Reliable because sendCommand requires the
-                // shell to be fully started, which is not guaranteed with a detached tab.
-                // Caller is responsible for passing a resolved absolute path in processArgs
-                // (see launch()) since ProcessBuilder does not honor PATHEXT on Windows.
-                builder.shouldAddToToolWindow(false)
-                    .requestFocus(false)
-                    .deferSessionStartUntilUiShown(false)
-                    .shellCommand(processArgs)
-            }
-
-            val tab = builder.createTab()
-            if (openInEditor) {
-                openInEditorDirectly(project, tab)
-            } else {
-                sendCommand(tab.view, command)
+                moveTabToEditor(project, tab)
             }
         } catch (t: Throwable) {
             LOG.warn("Failed to open integrated terminal for: $command", t)
@@ -123,31 +111,39 @@ object CopilotCliLauncher {
     }
 
     /**
-     * Opens a detached terminal tab directly in the editor area, bypassing the tool window.
+     * Detaches the freshly created terminal tab from the Terminal tool window and reopens it
+     * as a regular editor tab, by invoking the platform action `Terminal.MoveToEditor`.
      *
-     * Creates a TerminalViewVirtualFile via reflection (the class is internal to the terminal
-     * plugin) and opens it with FileEditorManager. The tab must have been created with
-     * shouldAddToToolWindow(false) so it is not attached to the Terminal tool window.
+     * Uses [ToolWindow.activate] instead of [invokeLater] to guarantee the tool window is
+     * fully initialized before we detach. Without this, first-time lazy init of the Terminal
+     * tool window can race with detach, leaving the session in both places.
      */
-    private fun openInEditorDirectly(project: Project, tab: TerminalToolWindowTab) {
-        try {
-            val file = createTerminalViewVirtualFile(tab.view)
-            FileEditorManager.getInstance(project).openFile(file, true)
-        } catch (t: Throwable) {
-            LOG.warn("Failed to open terminal in editor area, falling back to tool window tab", t)
+    private fun moveTabToEditor(project: Project, tab: TerminalToolWindowTab) {
+        val action = ActionManager.getInstance().getAction(MOVE_TERMINAL_TO_EDITOR_ACTION_ID)
+        if (action == null) {
+            LOG.info("Action $MOVE_TERMINAL_TO_EDITOR_ACTION_ID not found, leaving terminal tab in tool window")
+            return
         }
-    }
-
-    /**
-     * Creates a TerminalViewVirtualFile via reflection.
-     * The class is internal to the terminal plugin module but we need it to
-     * open a terminal session as an editor tab.
-     */
-    private fun createTerminalViewVirtualFile(view: TerminalView): LightVirtualFile {
-        val clazz = Class.forName("com.intellij.terminal.frontend.editor.TerminalViewVirtualFile")
-        val ctor = clazz.getDeclaredConstructor(TerminalView::class.java)
-        ctor.isAccessible = true
-        return ctor.newInstance(view) as LightVirtualFile
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TERMINAL_TOOL_WINDOW_ID)
+        if (toolWindow == null) {
+            LOG.info("Terminal tool window not found, leaving terminal tab in tool window")
+            return
+        }
+        // activate() ensures the tool window is fully initialized before running the callback.
+        // autoFocusContents=false avoids stealing focus from the editor tab we're about to open.
+        toolWindow.activate({
+            try {
+                toolWindow.contentManager.setSelectedContent(tab.content)
+                val dataContext = SimpleDataContext.builder()
+                    .add(CommonDataKeys.PROJECT, project)
+                    .add(PlatformDataKeys.TOOL_WINDOW, toolWindow)
+                    .add(PlatformDataKeys.TOOL_WINDOW_CONTENT_MANAGER, toolWindow.contentManager)
+                    .build()
+                val event = AnActionEvent.createEvent(action, dataContext, null, ActionPlaces.UNKNOWN, ActionUiKind.NONE, null)
+                ActionUtil.performAction(action, event)
+            } catch (t: Throwable) {
+                LOG.warn("Failed to move Copilot CLI terminal tab to editor", t)
+            }
+        }, false)
     }
 }
-

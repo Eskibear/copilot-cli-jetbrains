@@ -30,26 +30,17 @@ object CopilotCliService {
 
     private const val EXECUTABLE_NAME = "copilot"
 
-    fun isInstalled(): Boolean = findExecutable() != null
-
-    /**
-     * Returns the resolved `copilot` executable, or null if not found.
-     *
-     * Callers that need to spawn the binary directly (e.g. via the Reworked Terminal API's
-     * `shellCommand`, which goes through `ProcessBuilder` and does NOT honor PATHEXT for bare
-     * names on Windows) should use the absolute path returned here rather than the bare name.
-     */
-    fun findExecutable(): File? {
+    fun isInstalled(): Boolean {
         PathEnvironmentVariableUtil.findExecutableInPathOnAnyOS(EXECUTABLE_NAME)?.let {
             if (LOG.isDebugEnabled) LOG.debug("Found copilot via PATH at ${it.absolutePath}")
-            return it
+            return true
         }
         findInWellKnownLocations()?.let {
             if (LOG.isDebugEnabled) LOG.debug("Found copilot via well-known location at ${it.absolutePath}")
-            return it
+            return true
         }
         LOG.debug("copilot not found on PATH or in well-known locations")
-        return null
+        return false
     }
 
     private fun findInWellKnownLocations(): File? {
