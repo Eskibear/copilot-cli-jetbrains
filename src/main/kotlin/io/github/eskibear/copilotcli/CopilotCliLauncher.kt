@@ -20,14 +20,6 @@ private val LOG = logger<CopilotCliLauncher>()
  */
 object CopilotCliLauncher {
 
-    /**
-     * Opens a terminal tab and moves it to the editor area.
-     * Exposed for integration testing (avoids CLI-installed check).
-     */
-    fun openTerminalInEditor(project: Project, tabName: String = "Copilot CLI", command: String = "echo test") {
-        runInTerminal(project, tabName, command, "Test", openInEditor = true)
-    }
-
     fun launchOrInstall(project: Project) {
         if (CopilotCliService.isInstalled()) {
             launch(project)
@@ -37,12 +29,18 @@ object CopilotCliLauncher {
     }
 
     private fun launch(project: Project) {
+        // Resolve the absolute path. shellCommand goes through ProcessBuilder, which on
+        // Windows does NOT honor PATHEXT for bare names: passing just "copilot" fails when
+        // only `copilot.cmd` (npm) or a well-known-location shim exists, even though the
+        // shell-typed approach handled both cases. Always pass the resolved absolute path.
+        val exe = CopilotCliService.findExecutable()
         runInTerminal(
             project,
             tabName = "Copilot CLI",
             command = "copilot",
             errorTitle = "Launch GitHub Copilot CLI",
             openInEditor = true,
+            processArgs = listOf(exe?.absolutePath ?: "copilot"),
         )
     }
 
@@ -74,6 +72,7 @@ object CopilotCliLauncher {
         command: String,
         errorTitle: String,
         openInEditor: Boolean,
+        processArgs: List<String> = listOf(command),
     ) {
         try {
             val builder = TerminalToolWindowTabsManager.getInstance(project)
@@ -90,13 +89,15 @@ object CopilotCliLauncher {
                 // deferSessionStartUntilUiShown(false): without a tool window host, the
                 // "UI shown" event never fires and the shell process would never start.
                 //
-                // shellCommand: runs the command as the process directly instead of sending
-                // keystrokes to a shell. This is reliable because sendCommand requires the
+                // shellCommand: runs the binary directly as the terminal process instead of
+                // typing keystrokes into a shell. Reliable because sendCommand requires the
                 // shell to be fully started, which is not guaranteed with a detached tab.
+                // Caller is responsible for passing a resolved absolute path in processArgs
+                // (see launch()) since ProcessBuilder does not honor PATHEXT on Windows.
                 builder.shouldAddToToolWindow(false)
                     .requestFocus(false)
                     .deferSessionStartUntilUiShown(false)
-                    .shellCommand(listOf(command))
+                    .shellCommand(processArgs)
             }
 
             val tab = builder.createTab()
