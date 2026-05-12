@@ -11,6 +11,8 @@ import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.Key
+import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
@@ -30,6 +32,12 @@ object CopilotCliLauncher {
     private const val TERMINAL_TOOL_WINDOW_ID = "Terminal"
     private const val MOVE_TERMINAL_TO_EDITOR_ACTION_ID = "Terminal.MoveToEditor"
 
+    /**
+     * Per-project flag tracking whether we have pre-warmed the Terminal tool window in this
+     * IDE session. Stored in Project user data so it is automatically discarded on close.
+     */
+    private val TERMINAL_PREWARMED_KEY = Key.create<Boolean>("CopilotCliLauncher.terminalPrewarmed")
+
     fun launchOrInstall(project: Project) {
         if (CopilotCliService.isInstalled()) {
             launch(project)
@@ -39,13 +47,48 @@ object CopilotCliLauncher {
     }
 
     private fun launch(project: Project) {
-        runInTerminal(
-            project,
-            tabName = "Copilot CLI",
-            command = "copilot",
-            errorTitle = "Launch GitHub Copilot CLI",
-            openInEditor = true,
-        )
+        val launchAction = Runnable {
+            runInTerminal(
+                project,
+                tabName = "Copilot CLI",
+                command = "copilot",
+                errorTitle = "Launch GitHub Copilot CLI",
+                openInEditor = true,
+            )
+        }
+        withPrewarmedTerminalToolWindow(project, launchAction)
+    }
+
+    /**
+     * Runs [then] after the Terminal tool window has been initialized at least once in
+     * this IDE session.
+     *
+     * The first launch within a session triggers lazy initialization of the Terminal tool
+     * window. If that init runs concurrently with `createTab` + `Terminal.MoveToEditor`,
+     * the init callbacks re-register the moved tab and the same session ends up in both the
+     * Terminal panel AND the editor area. Pre-warming the tool window once forces init to
+     * complete before we touch it, so subsequent createTab/move calls are race-free.
+     *
+     * On second and later clicks within the same session this is a no-op.
+     */
+    private fun withPrewarmedTerminalToolWindow(project: Project, then: Runnable) {
+        if (project.getUserData(TERMINAL_PREWARMED_KEY) == true) {
+            then.run()
+            return
+        }
+        val toolWindow: ToolWindow? = ToolWindowManager.getInstance(project).getToolWindow(TERMINAL_TOOL_WINDOW_ID)
+        if (toolWindow == null) {
+            // No Terminal tool window registered (Terminal plugin disabled?). Just run.
+            project.putUserData(TERMINAL_PREWARMED_KEY, true)
+            then.run()
+            return
+        }
+        // activate() runs the callback after the tool window is fully initialized.
+        // autoFocusContents=false avoids stealing focus from the editor we are about to open.
+        toolWindow.activate({
+            project.putUserData(TERMINAL_PREWARMED_KEY, true)
+            then.run()
+        }, false)
     }
 
     private fun promptAndInstall(project: Project) {
