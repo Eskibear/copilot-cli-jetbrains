@@ -14,6 +14,7 @@ import com.google.gson.JsonObject
 fun main() {
     val nonce = java.util.UUID.randomUUID().toString()
     val transport = Transport.create()
+    transport.bind()
     println("Transport: scheme=${transport.scheme} socketPath=${transport.socketPath}")
     println("Auth header: Authorization: Nonce $nonce")
     println("Press Ctrl+C to stop.")

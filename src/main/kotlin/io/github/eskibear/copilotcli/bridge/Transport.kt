@@ -46,6 +46,13 @@ sealed interface Transport : Closeable {
     /** Scheme as written to the lock file. */
     val scheme: String
 
+    /**
+     * Ensures the OS-level endpoint exists (named pipe instance / bound socket).
+     * Idempotent. Throws if the endpoint cannot be bound, in which case the bridge
+     * should refuse to publish a lock file.
+     */
+    fun bind()
+
     /** Blocks until a client connects. Returns null when the transport is closed. */
     fun accept(): Connection?
 
@@ -68,6 +75,10 @@ private class UnixSocketTransport : Transport {
 
     init {
         runCatching { Files.setPosixFilePermissions(tmpDir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")) }
+    }
+
+    override fun bind() {
+        // Already bound in `channel` property initializer.
     }
 
     override fun accept(): Connection? {
@@ -99,10 +110,16 @@ private class NamedPipeTransport : Transport {
     override val scheme: String = "pipe"
 
     @Volatile private var closed = false
-    // The first pipe instance is created eagerly so the path exists in the OS by the time
-    // the lock file is published. Without this, the CLI sees the lock file before the
-    // accept loop has had a chance to call CreateNamedPipe and gets ENOENT on connect.
-    @Volatile private var preBound: HANDLE? = createPipeInstance()
+    // The first pipe instance is created in bind() (not in the property initializer)
+    // so any JNA / classloader trouble surfaces as an exception from a method call we
+    // can catch and report cleanly, rather than from constructor side-effects.
+    @Volatile private var preBound: HANDLE? = null
+
+    override fun bind() {
+        if (preBound != null) return
+        preBound = createPipeInstance()
+        LOG.info("NamedPipe bound: $socketPath")
+    }
 
     override fun accept(): Connection? {
         if (closed) return null

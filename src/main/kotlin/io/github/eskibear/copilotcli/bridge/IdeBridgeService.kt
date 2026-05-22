@@ -1,5 +1,8 @@
 package io.github.eskibear.copilotcli.bridge
 
+import com.intellij.notification.NotificationGroup
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.components.Service
@@ -28,15 +31,23 @@ class IdeBridgeService(private val project: Project) : Disposable {
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
+        var phase = "init"
         try {
+            phase = "construct-transport"
             val nonce = UUID.randomUUID().toString()
             val tx = Transport.create()
             transport = tx
+            LOG.info("Transport constructed: scheme=${tx.scheme} socketPath=${tx.socketPath}")
 
+            phase = "bind"
+            tx.bind()
+
+            phase = "build-server"
             val tools = IdeTools(project)
             val dispatcher = McpDispatcher(tools)
             val server = McpServer(nonce, dispatcher)
 
+            phase = "write-lock"
             val id = UUID.randomUUID().toString()
             val lock = LockFile(LockFile.resolveLockDir(), id)
             lockFile = lock
@@ -53,6 +64,7 @@ class IdeBridgeService(private val project: Project) : Disposable {
                 )
             )
 
+            phase = "start-accept"
             acceptThread = thread(
                 name = "copilot-ide-bridge-${ManagementFactory.getRuntimeMXBean().name}",
                 isDaemon = true,
@@ -61,8 +73,20 @@ class IdeBridgeService(private val project: Project) : Disposable {
             }
             LOG.info("IDE bridge started: scheme=${tx.scheme} socketPath=${tx.socketPath}")
         } catch (t: Throwable) {
-            LOG.warn("Failed to start IDE bridge", t)
+            LOG.warn("Failed to start IDE bridge (phase=$phase)", t)
+            notifyStartupFailure(phase, t)
             cleanupSilently()
+        }
+    }
+
+    private fun notifyStartupFailure(phase: String, t: Throwable) {
+        try {
+            val message = "Copilot CLI IDE bridge failed to start at phase '$phase': ${t.javaClass.simpleName}: ${t.message}"
+            val group = NotificationGroupManager.getInstance().getNotificationGroup("Copilot CLI Bridge")
+                ?: NotificationGroup.balloonGroup("Copilot CLI Bridge")
+            group.createNotification(message, NotificationType.WARNING).notify(project)
+        } catch (_: Throwable) {
+            // Don't let notification failure mask the original error.
         }
     }
 

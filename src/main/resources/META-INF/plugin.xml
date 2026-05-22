@@ -24,6 +24,7 @@
                                 implementation="io.github.eskibear.copilotcli.CopilotCliStatusBarWidgetFactory"
                                 order="last"/>
         <postStartupActivity implementation="io.github.eskibear.copilotcli.bridge.IdeBridgeStartupActivity"/>
+        <notificationGroup id="Copilot CLI Bridge" displayType="BALLOON"/>
     </extensions>
 
     <actions>
