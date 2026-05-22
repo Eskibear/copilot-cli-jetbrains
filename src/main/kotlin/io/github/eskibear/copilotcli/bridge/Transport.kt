@@ -133,11 +133,28 @@ private class NamedPipeTransport : Transport {
         val input = NamedPipeInputStream(pipe)
         val output = NamedPipeOutputStream(pipe)
         return Connection(input, output) {
-            // Skip DisconnectNamedPipe: it forces the server end down which the client
-            // sees as ERROR_NO_DATA (libuv maps that to EPIPE). Closing the handle alone
-            // lets the client see ERROR_BROKEN_PIPE which libuv reports as a clean EOF.
+            // Critical close sequence on Windows named pipes:
+            // 1) FlushFileBuffers waits until the client has drained the pipe buffer.
+            // 2) Read into a discard buffer until the client closes its end. This lets
+            //    the HTTP client (undici / libuv) fully process the response and signal
+            //    EOF itself, instead of us forcing it. Without this, the client often
+            //    sees "socket hang up" because our CloseHandle races its response parse.
+            // 3) Only then CloseHandle the server-side instance.
+            // The drain read is done on a separate thread with a 5s timeout so a misbehaving
+            // client cannot hang our accept loop's handler thread forever.
             try { k.FlushFileBuffers(pipe) } catch (_: Throwable) {}
+            val drainer = Thread {
+                try {
+                    val drain = ByteArray(256)
+                    val read = IntByReference()
+                    k.ReadFile(pipe, drain, drain.size, read, null)
+                } catch (_: Throwable) {}
+            }.apply { isDaemon = true; start() }
+            drainer.join(5_000)
             try { k.CloseHandle(pipe) } catch (_: Throwable) {}
+            // CloseHandle should unblock any pending ReadFile; give the drainer thread a
+            // brief moment to exit cleanly.
+            if (drainer.isAlive) drainer.join(500)
         }
     }
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Smoke test for the IDE bridge. Reads the JetBrains lock file from
-// ~/.copilot/ide and sends an MCP `initialize` over the named pipe / socket.
+// ~/.copilot/ide and runs two probes against it:
+//
+//   - raw `net.connect` POST (no HTTP client library)
+//   - `undici.request` POST (same library the Copilot CLI's MCP transport uses)
 //
 // Usage:
 //   node scripts/probe-bridge.js
 //
-// Prints the lock file picked, the bytes sent, and the parsed JSON-RPC response.
-// Exit code 0 on success, 1 on any failure.
+// Exit code 0 if both probes succeed, 1 otherwise.
 
 const fs = require('fs');
 const net = require('net');
@@ -35,6 +37,21 @@ function findLockFile() {
   return jb || candidates[0];
 }
 
+function initRequestBody() {
+  return JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'probe-bridge', version: '0.0.1' },
+    },
+  });
+}
+
+// ---------- Raw net.connect probe ----------
+
 function buildHttpRequest(method, body, headers) {
   const lines = [];
   lines.push(`${method} /mcp HTTP/1.1`);
@@ -52,7 +69,7 @@ function buildHttpRequest(method, body, headers) {
 
 function parseHttpResponse(raw) {
   const idx = raw.indexOf('\r\n\r\n');
-  if (idx < 0) throw new Error('No header/body delimiter found in response');
+  if (idx < 0) throw new Error('No header/body delimiter found');
   const headerBlock = raw.slice(0, idx).toString('utf8');
   const body = raw.slice(idx + 4);
   const headerLines = headerBlock.split('\r\n');
@@ -65,52 +82,85 @@ function parseHttpResponse(raw) {
   return { proto, status: parseInt(status, 10), reason: reasonParts.join(' '), headers, body };
 }
 
-function send(socketPath, payload) {
+function rawSend(socketPath, payload) {
   return new Promise((resolve, reject) => {
-    const client = net.connect({ path: socketPath }, () => {
-      client.write(payload);
-    });
+    const client = net.connect({ path: socketPath }, () => client.write(payload));
     const chunks = [];
     client.on('data', (c) => chunks.push(c));
     client.on('end', () => resolve(Buffer.concat(chunks)));
     client.on('error', reject);
-    client.setTimeout(5000, () => reject(new Error('timeout')));
+    client.setTimeout(5000, () => { reject(new Error('timeout')); client.destroy(); });
   });
 }
 
-async function main() {
-  const { file, info } = findLockFile();
-  console.log(`Lock file:    ${file}`);
-  console.log(`IDE:          ${info.ideName} (pid=${info.pid}, scheme=${info.scheme})`);
-  console.log(`Socket path:  ${info.socketPath}`);
-  console.log(`Workspaces:   ${(info.workspaceFolders || []).join(', ')}`);
-
-  const initBody = JSON.stringify({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'probe-bridge', version: '0.0.1' },
-    },
-  });
-  const req = buildHttpRequest('POST', initBody, info.headers || {});
-  console.log('---\nSending initialize...');
-  const raw = await send(info.socketPath, req);
+async function rawProbe(info) {
+  console.log('--- Probe 1: raw net.connect ---');
+  const req = buildHttpRequest('POST', initRequestBody(), info.headers || {});
+  const raw = await rawSend(info.socketPath, req);
   const res = parseHttpResponse(raw);
   console.log(`HTTP ${res.status} ${res.reason}`);
-  console.log(`mcp-session-id: ${res.headers['mcp-session-id'] || '(missing)'}`);
-  console.log('Body:');
-  console.log(res.body.toString('utf8'));
-
-  if (res.status !== 200) process.exit(1);
+  console.log(`  mcp-session-id: ${res.headers['mcp-session-id'] || '(missing)'}`);
+  console.log(`  body: ${res.body.toString('utf8').slice(0, 200)}`);
+  if (res.status !== 200) throw new Error(`Non-200: ${res.status}`);
   const parsed = JSON.parse(res.body.toString('utf8'));
-  if (!parsed.result || !parsed.result.protocolVersion) {
-    console.error('Missing result.protocolVersion');
-    process.exit(1);
+  if (!parsed.result || !parsed.result.protocolVersion) throw new Error('Missing result.protocolVersion');
+  console.log(`  protocolVersion negotiated: ${parsed.result.protocolVersion}`);
+  console.log('  OK');
+}
+
+// ---------- undici/fetch probe ----------
+
+async function undiciProbe(info) {
+  console.log('--- Probe 2: undici.request (same lib as CLI) ---');
+  let undici;
+  try {
+    undici = require('undici');
+  } catch (e) {
+    console.log('  undici not available; skipping. (npm install -g undici if you want this probe.)');
+    return;
   }
-  console.log('OK');
+  const dispatcher = new undici.Agent({
+    connect: { socketPath: info.socketPath },
+  });
+  const res = await undici.request('http://localhost/mcp', {
+    method: 'POST',
+    headers: {
+      ...(info.headers || {}),
+      'content-type': 'application/json',
+      'accept': 'application/json, text/event-stream',
+    },
+    body: initRequestBody(),
+    dispatcher,
+  });
+  console.log(`HTTP ${res.statusCode}`);
+  console.log(`  mcp-session-id: ${res.headers['mcp-session-id'] || '(missing)'}`);
+  const bodyText = await res.body.text();
+  console.log(`  body: ${bodyText.slice(0, 200)}`);
+  if (res.statusCode !== 200) throw new Error(`Non-200: ${res.statusCode}`);
+  const parsed = JSON.parse(bodyText);
+  if (!parsed.result || !parsed.result.protocolVersion) throw new Error('Missing result.protocolVersion');
+  console.log(`  protocolVersion negotiated: ${parsed.result.protocolVersion}`);
+  await dispatcher.close();
+  console.log('  OK');
+}
+
+// ---------- main ----------
+
+async function main() {
+  const { file, info } = findLockFile();
+  console.log(`Lock file:   ${file}`);
+  console.log(`IDE:         ${info.ideName} (pid=${info.pid}, scheme=${info.scheme})`);
+  console.log(`Socket path: ${info.socketPath}`);
+  console.log(`Workspaces:  ${(info.workspaceFolders || []).join(', ')}`);
+  console.log('');
+
+  let ok = true;
+  try { await rawProbe(info); } catch (e) { console.error(`  FAIL: ${e.message}`); ok = false; }
+  console.log('');
+  try { await undiciProbe(info); } catch (e) { console.error(`  FAIL: ${e.message}`); ok = false; }
+  console.log('');
+  if (!ok) process.exit(1);
+  console.log('All probes passed.');
 }
 
 main().catch((e) => {
