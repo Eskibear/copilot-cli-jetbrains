@@ -144,6 +144,52 @@ async function undiciProbe(info) {
   console.log('  OK');
 }
 
+// ---------- http.request probe (mirrors the CLI exactly) ----------
+
+async function httpProbe(info) {
+  console.log('--- Probe 3: http.request (same lib path as Copilot CLI) ---');
+  const http = require('http');
+  const body = initRequestBody();
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      socketPath: info.socketPath,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        ...(info.headers || {}),
+        'content-type': 'application/json',
+        'accept': 'application/json, text/event-stream',
+        'content-length': Buffer.byteLength(body),
+        host: 'localhost',
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks).toString('utf8');
+        console.log(`HTTP ${res.statusCode}`);
+        console.log(`  mcp-session-id: ${res.headers['mcp-session-id'] || '(missing)'}`);
+        console.log(`  body: ${buf.slice(0, 200)}`);
+        if (res.statusCode !== 200) return reject(new Error(`Non-200: ${res.statusCode}`));
+        try {
+          const parsed = JSON.parse(buf);
+          if (!parsed.result || !parsed.result.protocolVersion) {
+            return reject(new Error('Missing result.protocolVersion'));
+          }
+          console.log(`  protocolVersion negotiated: ${parsed.result.protocolVersion}`);
+          console.log(`  id type: ${typeof parsed.id} value: ${JSON.stringify(parsed.id)}`);
+          console.log('  OK');
+          resolve();
+        } catch (e) { reject(e); }
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // ---------- main ----------
 
 async function main() {
@@ -156,6 +202,8 @@ async function main() {
 
   let ok = true;
   try { await rawProbe(info); } catch (e) { console.error(`  FAIL: ${e.message}`); ok = false; }
+  console.log('');
+  try { await httpProbe(info); } catch (e) { console.error(`  FAIL: ${e.message}`); ok = false; }
   console.log('');
   try { await undiciProbe(info); } catch (e) { console.error(`  FAIL: ${e.message}`); ok = false; }
   console.log('');

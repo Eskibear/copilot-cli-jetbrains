@@ -1,6 +1,5 @@
 package io.github.eskibear.copilotcli.bridge
 
-import com.intellij.openapi.diagnostic.logger
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinBase
 import com.sun.jna.platform.win32.WinNT
@@ -18,7 +17,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 
-private val LOG = logger<Transport>()
+private val LOG = BridgeLog.forClass(Transport::class.java)
 
 /**
  * Per-connection byte channel handed to the request handler thread.

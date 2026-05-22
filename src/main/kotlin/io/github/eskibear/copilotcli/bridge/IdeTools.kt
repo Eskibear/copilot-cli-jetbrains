@@ -14,7 +14,7 @@ import com.intellij.openapi.project.Project
  * Tool names match the VS Code surface verbatim (the CLI hardcodes them, e.g. the
  * tool is called `get_vscode_info` everywhere even though it's just "IDE info").
  */
-class IdeTools(private val project: Project) {
+class IdeTools(private val project: Project) : IdeToolHost {
 
     private data class ToolDef(
         val name: String,
@@ -44,7 +44,7 @@ class IdeTools(private val project: Project) {
         ),
     )
 
-    fun listTools(): JsonArray = JsonArray().apply {
+    override fun listTools(): JsonArray = JsonArray().apply {
         defs.forEach { d ->
             add(JsonObject().apply {
                 addProperty("name", d.name)
@@ -54,7 +54,7 @@ class IdeTools(private val project: Project) {
         }
     }
 
-    fun callTool(params: JsonObject): JsonObject {
+    override fun callTool(params: JsonObject): JsonObject {
         val name = params.get("name")?.asString
             ?: return toolError("Missing tool name")
         val args = params.getAsJsonObject("arguments") ?: JsonObject()
@@ -113,9 +113,7 @@ class IdeTools(private val project: Project) {
     private fun updateSessionName(args: JsonObject): JsonObject {
         val name = args.get("name")?.asString ?: return toolError("Missing 'name' argument")
         // PoC: log only. A future revision can rename the launched terminal tab.
-        com.intellij.openapi.diagnostic.Logger
-            .getInstance(IdeTools::class.java)
-            .info("Copilot CLI requested session name: $name")
+        BridgeLog.forClass(IdeTools::class.java).info("Copilot CLI requested session name: $name")
         return textResult("ok")
     }
 

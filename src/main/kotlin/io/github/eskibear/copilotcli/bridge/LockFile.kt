@@ -1,14 +1,13 @@
 package io.github.eskibear.copilotcli.bridge
 
 import com.google.gson.GsonBuilder
-import com.intellij.openapi.diagnostic.logger
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 
-private val LOG = logger<LockFile>()
+private val LOG = BridgeLog.forClass(LockFile::class.java)
 
 /**
  * JSON contract consumed by Copilot CLI. Field names and types must match the schema

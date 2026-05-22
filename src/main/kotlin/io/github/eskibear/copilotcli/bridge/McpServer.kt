@@ -3,14 +3,13 @@ package io.github.eskibear.copilotcli.bridge
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.intellij.openapi.diagnostic.logger
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
-private val LOG = logger<McpServer>()
+private val LOG = BridgeLog.forClass(McpServer::class.java)
 
 /**
  * Minimal HTTP/1.1 + MCP JSON-RPC server bound to a per-connection byte stream.

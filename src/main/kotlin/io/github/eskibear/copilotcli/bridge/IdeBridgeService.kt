@@ -3,7 +3,6 @@ package io.github.eskibear.copilotcli.bridge
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import java.lang.management.ManagementFactory
@@ -11,7 +10,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-private val LOG = logger<IdeBridgeService>()
+private val LOG = BridgeLog.forClass(IdeBridgeService::class.java)
 
 /**
  * Per-project service that owns the lifetime of one MCP server + lock file.

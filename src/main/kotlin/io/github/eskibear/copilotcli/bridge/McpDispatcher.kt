@@ -3,9 +3,8 @@ package io.github.eskibear.copilotcli.bridge
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
-import com.intellij.openapi.diagnostic.logger
 
-private val LOG = logger<McpDispatcher>()
+private val LOG = BridgeLog.forClass(McpDispatcher::class.java)
 
 /**
  * Routes JSON-RPC requests to MCP handlers.
@@ -14,7 +13,7 @@ private val LOG = logger<McpDispatcher>()
  * as connected. Tools are read-only context providers; mutating tools (open_diff,
  * close_diff) are stubbed out for the PoC.
  */
-class McpDispatcher(private val tools: IdeTools) {
+class McpDispatcher(private val tools: IdeToolHost) {
 
     private val protocolVersion = "2025-06-18"
     private val supportedProtocolVersions = setOf(
