@@ -99,25 +99,15 @@ private class NamedPipeTransport : Transport {
     override val scheme: String = "pipe"
 
     @Volatile private var closed = false
+    // The first pipe instance is created eagerly so the path exists in the OS by the time
+    // the lock file is published. Without this, the CLI sees the lock file before the
+    // accept loop has had a chance to call CreateNamedPipe and gets ENOENT on connect.
+    @Volatile private var preBound: HANDLE? = createPipeInstance()
 
     override fun accept(): Connection? {
         if (closed) return null
         val k = Kernel32.INSTANCE
-        // PIPE_TYPE_BYTE + PIPE_UNLIMITED_INSTANCES so we can keep accepting after each client.
-        val pipe: HANDLE = k.CreateNamedPipe(
-            socketPath,
-            WinBase.PIPE_ACCESS_DUPLEX,
-            WinBase.PIPE_TYPE_BYTE or WinBase.PIPE_READMODE_BYTE or WinBase.PIPE_WAIT,
-            WinBase.PIPE_UNLIMITED_INSTANCES,
-            64 * 1024,
-            64 * 1024,
-            0,
-            null,
-        )
-        if (WinBase.INVALID_HANDLE_VALUE == pipe) {
-            val err = k.GetLastError()
-            throw IOException("CreateNamedPipe failed: error=$err path=$socketPath")
-        }
+        val pipe: HANDLE = preBound?.also { preBound = null } ?: createPipeInstance()
         val connected = k.ConnectNamedPipe(pipe, null)
         if (!connected) {
             val err = k.GetLastError()
@@ -157,8 +147,30 @@ private class NamedPipeTransport : Transport {
         }
     }
 
+    private fun createPipeInstance(): HANDLE {
+        val k = Kernel32.INSTANCE
+        // PIPE_TYPE_BYTE + PIPE_UNLIMITED_INSTANCES so we can keep accepting after each client.
+        val pipe: HANDLE = k.CreateNamedPipe(
+            socketPath,
+            WinBase.PIPE_ACCESS_DUPLEX,
+            WinBase.PIPE_TYPE_BYTE or WinBase.PIPE_READMODE_BYTE or WinBase.PIPE_WAIT,
+            WinBase.PIPE_UNLIMITED_INSTANCES,
+            64 * 1024,
+            64 * 1024,
+            0,
+            null,
+        )
+        if (WinBase.INVALID_HANDLE_VALUE == pipe) {
+            val err = k.GetLastError()
+            throw IOException("CreateNamedPipe failed: error=$err path=$socketPath")
+        }
+        return pipe
+    }
+
     override fun close() {
         closed = true
+        preBound?.let { try { Kernel32.INSTANCE.CloseHandle(it) } catch (_: Throwable) {} }
+        preBound = null
         // Unblock pending ConnectNamedPipe by opening + immediately closing a client handle.
         try {
             val k = Kernel32.INSTANCE

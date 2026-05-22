@@ -71,7 +71,7 @@ class IdeBridgeService(private val project: Project) : Disposable {
             val conn = try {
                 tx.accept()
             } catch (t: Throwable) {
-                LOG.debug("Transport accept failure", t)
+                LOG.warn("Transport accept failure; bridge will stop accepting", t)
                 null
             } ?: break
 
