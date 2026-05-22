@@ -16,7 +16,12 @@ private val LOG = logger<McpDispatcher>()
  */
 class McpDispatcher(private val tools: IdeTools) {
 
-    private val protocolVersion = "2024-11-05"
+    private val protocolVersion = "2025-06-18"
+    private val supportedProtocolVersions = setOf(
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+    )
     private val serverInfo = JsonObject().apply {
         addProperty("name", "IntelliJ Platform Copilot CLI Bridge")
         addProperty("version", "0.1.0")
@@ -33,7 +38,7 @@ class McpDispatcher(private val tools: IdeTools) {
 
         return try {
             when (method) {
-                "initialize" -> ok(id, initializeResult())
+                "initialize" -> ok(id, initializeResult(params))
                 "notifications/initialized", "notifications/cancelled" -> null
                 "ping" -> ok(id, JsonObject())
                 "tools/list" -> ok(id, JsonObject().apply { add("tools", tools.listTools()) })
@@ -51,8 +56,14 @@ class McpDispatcher(private val tools: IdeTools) {
         }
     }
 
-    private fun initializeResult(): JsonObject = JsonObject().apply {
-        addProperty("protocolVersion", protocolVersion)
+    private fun initializeResult(params: JsonObject): JsonObject = JsonObject().apply {
+        val clientVersion = params.get("protocolVersion")?.asString
+        val negotiated = if (clientVersion != null && clientVersion in supportedProtocolVersions) {
+            clientVersion
+        } else {
+            protocolVersion
+        }
+        addProperty("protocolVersion", negotiated)
         add("serverInfo", serverInfo)
         add("capabilities", JsonObject().apply {
             add("tools", JsonObject())

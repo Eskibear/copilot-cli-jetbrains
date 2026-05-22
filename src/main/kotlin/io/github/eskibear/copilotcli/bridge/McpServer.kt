@@ -30,6 +30,9 @@ class McpServer(
     fun handle(conn: Connection) {
         try {
             val request = parseRequest(conn.input) ?: return
+            if (LOG.isDebugEnabled) {
+                LOG.debug("${request.method} ${request.path} (auth=${request.headers["authorization"] != null}, body=${request.body.size}b)")
+            }
             if (request.headers["authorization"]?.equals("Nonce $nonce", ignoreCase = false) != true) {
                 writeResponse(conn.output, 401, "Unauthorized", "text/plain", "Unauthorized".toByteArray())
                 return
@@ -166,7 +169,12 @@ private fun writeResponse(
     sb.append("Connection: close\r\n")
     for ((k, v) in extraHeaders) sb.append(k).append(": ").append(v).append("\r\n")
     sb.append("\r\n")
-    out.write(sb.toString().toByteArray(StandardCharsets.ISO_8859_1))
-    if (body.isNotEmpty()) out.write(body)
+    val headerBytes = sb.toString().toByteArray(StandardCharsets.ISO_8859_1)
+    // Single WriteFile is friendlier to named pipes than two separate writes; the client
+    // reads response headers and body in one go without an intermediate buffering gap.
+    val combined = ByteArray(headerBytes.size + body.size)
+    System.arraycopy(headerBytes, 0, combined, 0, headerBytes.size)
+    if (body.isNotEmpty()) System.arraycopy(body, 0, combined, headerBytes.size, body.size)
+    out.write(combined)
     out.flush()
 }

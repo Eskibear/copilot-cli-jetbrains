@@ -133,8 +133,10 @@ private class NamedPipeTransport : Transport {
         val input = NamedPipeInputStream(pipe)
         val output = NamedPipeOutputStream(pipe)
         return Connection(input, output) {
+            // Skip DisconnectNamedPipe: it forces the server end down which the client
+            // sees as ERROR_NO_DATA (libuv maps that to EPIPE). Closing the handle alone
+            // lets the client see ERROR_BROKEN_PIPE which libuv reports as a clean EOF.
             try { k.FlushFileBuffers(pipe) } catch (_: Throwable) {}
-            try { k.DisconnectNamedPipe(pipe) } catch (_: Throwable) {}
             try { k.CloseHandle(pipe) } catch (_: Throwable) {}
         }
     }
