@@ -117,8 +117,32 @@ private class NamedPipeTransport : Transport {
 
     override fun bind() {
         if (preBound != null) return
+        ensureJnaLoaded()
         preBound = createPipeInstance()
         LOG.info("NamedPipe bound: $socketPath")
+    }
+
+    /**
+     * Forces JNA's native dispatch library to load via IntelliJ's own `JnaLoader`.
+     * The IntelliJ Platform extracts and loads `jnidispatch.<ext>` to a known
+     * location at startup, but plugin classloaders don't trigger this on their own:
+     * first call to `Kernel32.INSTANCE` from a plugin throws
+     * `UnsatisfiedLinkError: Unable to locate JNA native support library` because
+     * the bundled JNA jar's resource lookup runs in the plugin's classloader scope
+     * where the native lib isn't visible.
+     */
+    private fun ensureJnaLoaded() {
+        // Reflective call so this file still compiles if the symbol moves; on a
+        // healthy IntelliJ runtime this resolves and loads the native lib.
+        try {
+            val klass = Class.forName("com.intellij.jna.JnaLoader")
+            val loaded = klass.getMethod("load").invoke(null) as? Boolean ?: false
+            if (!loaded) {
+                throw IllegalStateException("com.intellij.jna.JnaLoader.load() returned false")
+            }
+        } catch (e: ClassNotFoundException) {
+            LOG.warn("com.intellij.jna.JnaLoader not found; trying direct JNA init", e)
+        }
     }
 
     override fun accept(): Connection? {
