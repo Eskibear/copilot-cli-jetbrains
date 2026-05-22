@@ -23,6 +23,7 @@
         <statusBarWidgetFactory id="io.github.eskibear.copilotcli.StatusBarWidget"
                                 implementation="io.github.eskibear.copilotcli.CopilotCliStatusBarWidgetFactory"
                                 order="last"/>
+        <postStartupActivity implementation="io.github.eskibear.copilotcli.bridge.IdeBridgeStartupActivity"/>
     </extensions>
 
     <actions>
