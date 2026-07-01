@@ -17,12 +17,15 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
     <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <statusBarWidgetFactory id="io.github.eskibear.copilotcli.StatusBarWidget"
                                 implementation="io.github.eskibear.copilotcli.CopilotCliStatusBarWidgetFactory"
                                 order="last"/>
+        <projectService serviceImplementation="io.github.eskibear.copilotcli.ide.IdeMcpProjectService"/>
+        <postStartupActivity implementation="io.github.eskibear.copilotcli.ide.IdeMcpStartupActivity"/>
     </extensions>
 
     <actions>
@@ -37,6 +40,18 @@
                 text="Rename..."
                 description="Rename this terminal tab.">
             <add-to-group group-id="EditorTabPopupMenu" anchor="first"/>
+        </action>
+        <action id="CopilotCli.AddFileReference"
+                class="io.github.eskibear.copilotcli.ide.AddFileReferenceToPromptAction"
+                text="Add File Reference to Copilot CLI Prompt"
+                description="Send the active file as a reference to the connected Copilot CLI session.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="CopilotCli.AddSelection"
+                class="io.github.eskibear.copilotcli.ide.AddSelectionToPromptAction"
+                text="Add Selection to Copilot CLI Prompt"
+                description="Send the current selection to the connected Copilot CLI session.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>
