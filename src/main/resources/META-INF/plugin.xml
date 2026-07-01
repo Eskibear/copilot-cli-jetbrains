@@ -5,9 +5,10 @@
     <vendor url="https://github.com/Eskibear">Eskibear</vendor>
     <description><![CDATA[
         <p>Launches the <a href="https://github.com/github/copilot-cli">GitHub Copilot CLI</a>
-        (<code>copilot</code>) in the IDE's integrated terminal.</p>
-        <p>Adds two entry points:</p>
+        (<code>copilot</code>) in a dedicated tool window docked to the right side of the IDE.</p>
+        <p>Adds three entry points:</p>
         <ul>
+          <li>A <b>Copilot CLI</b> tool window on the right (click the stripe button to open it).</li>
           <li><b>Tools | Launch GitHub Copilot CLI</b> menu action.</li>
           <li>A Copilot icon on the bottom-right status bar (single-click to launch).</li>
         </ul>
@@ -29,6 +30,11 @@
                                 order="last"/>
         <projectService serviceImplementation="io.github.eskibear.copilotcli.ide.IdeMcpProjectService"/>
         <postStartupActivity implementation="io.github.eskibear.copilotcli.ide.IdeMcpStartupActivity"/>
+        <toolWindow id="Copilot CLI"
+                    anchor="right"
+                    canCloseContents="true"
+                    icon="io.github.eskibear.copilotcli.CopilotCliIcons.COPILOT"
+                    factoryClass="io.github.eskibear.copilotcli.CopilotCliToolWindowFactory"/>
     </extensions>
 
     <actions>
