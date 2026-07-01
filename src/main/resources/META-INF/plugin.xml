@@ -14,6 +14,9 @@
         <p>If the CLI is not installed, the plugin opens a terminal and runs the official install
         command for your platform (<code>winget install GitHub.Copilot</code> on Windows,
         <code>curl -fsSL https://gh.io/copilot-install | bash</code> on macOS / Linux).</p>
+        <p>The plugin also implements the Copilot CLI <code>/ide</code> connection: while a project
+        is open it advertises the IDE to the CLI so the CLI can read diagnostics and the current
+        selection, and show proposed edits as accept/reject diffs inside the IDE.</p>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
