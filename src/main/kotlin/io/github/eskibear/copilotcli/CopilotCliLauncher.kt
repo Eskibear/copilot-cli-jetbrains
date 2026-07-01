@@ -1,20 +1,8 @@
 package io.github.eskibear.copilotcli
 
-import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.actionSystem.ActionPlaces
-import com.intellij.openapi.actionSystem.ActionUiKind
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.PlatformDataKeys
-import com.intellij.openapi.actionSystem.ex.ActionUtil
-import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapi.util.Key
-import com.intellij.openapi.wm.ToolWindow
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import com.intellij.terminal.frontend.view.TerminalView
 
@@ -23,20 +11,21 @@ private val LOG = logger<CopilotCliLauncher>()
 /**
  * Shared entry point used by both the Tools menu action and the status bar widget.
  *
- * Uses the Reworked Terminal API (TerminalToolWindowTabsManager) so the launched terminal
- * tab supports being moved into the editor zone (which is what we do by default, to give
- * the Copilot CLI as much screen real estate as possible).
+ * Opens the Copilot CLI in a Reworked Terminal tab (TerminalToolWindowTabsManager) inside the
+ * Terminal tool window.
+ *
+ * We intentionally do NOT move the tab into the editor area anymore. A Reworked Terminal that
+ * lives in the editor cannot be dragged into a split: the platform re-opens the terminal view
+ * file in the new split without the transient `CLOSING_TO_REOPEN` flag, so
+ * `TerminalViewFileEditorProvider` spins up a brand new shell (without `copilot`) while the
+ * original editor is disposed and its session is cancelled. The result is a fresh terminal in
+ * the split and the running Copilot session gone (see issue #2).
+ *
+ * A terminal that stays in the Terminal tool window does not have this problem: it can be
+ * split inside the tool window and the whole tool window can be docked to any side of the IDE
+ * without recreating the session.
  */
 object CopilotCliLauncher {
-
-    private const val TERMINAL_TOOL_WINDOW_ID = "Terminal"
-    private const val MOVE_TERMINAL_TO_EDITOR_ACTION_ID = "Terminal.MoveToEditor"
-
-    /**
-     * Per-project flag tracking whether we have pre-warmed the Terminal tool window in this
-     * IDE session. Stored in Project user data so it is automatically discarded on close.
-     */
-    private val TERMINAL_PREWARMED_KEY = Key.create<Boolean>("CopilotCliLauncher.terminalPrewarmed")
 
     fun launchOrInstall(project: Project) {
         if (CopilotCliService.isInstalled()) {
@@ -47,48 +36,12 @@ object CopilotCliLauncher {
     }
 
     private fun launch(project: Project) {
-        val launchAction = Runnable {
-            runInTerminal(
-                project,
-                tabName = "Copilot CLI",
-                command = "copilot",
-                errorTitle = "Launch GitHub Copilot CLI",
-                openInEditor = true,
-            )
-        }
-        withPrewarmedTerminalToolWindow(project, launchAction)
-    }
-
-    /**
-     * Runs [then] after the Terminal tool window has been initialized at least once in
-     * this IDE session.
-     *
-     * The first launch within a session triggers lazy initialization of the Terminal tool
-     * window. If that init runs concurrently with `createTab` + `Terminal.MoveToEditor`,
-     * the init callbacks re-register the moved tab and the same session ends up in both the
-     * Terminal panel AND the editor area. Pre-warming the tool window once forces init to
-     * complete before we touch it, so subsequent createTab/move calls are race-free.
-     *
-     * On second and later clicks within the same session this is a no-op.
-     */
-    private fun withPrewarmedTerminalToolWindow(project: Project, then: Runnable) {
-        if (project.getUserData(TERMINAL_PREWARMED_KEY) == true) {
-            then.run()
-            return
-        }
-        val toolWindow: ToolWindow? = ToolWindowManager.getInstance(project).getToolWindow(TERMINAL_TOOL_WINDOW_ID)
-        if (toolWindow == null) {
-            // No Terminal tool window registered (Terminal plugin disabled?). Just run.
-            project.putUserData(TERMINAL_PREWARMED_KEY, true)
-            then.run()
-            return
-        }
-        // activate() runs the callback after the tool window is fully initialized.
-        // autoFocusContents=false avoids stealing focus from the editor we are about to open.
-        toolWindow.activate({
-            project.putUserData(TERMINAL_PREWARMED_KEY, true)
-            then.run()
-        }, false)
+        runInTerminal(
+            project,
+            tabName = "Copilot CLI",
+            command = "copilot",
+            errorTitle = "Launch GitHub Copilot CLI",
+        )
     }
 
     private fun promptAndInstall(project: Project) {
@@ -109,7 +62,6 @@ object CopilotCliLauncher {
             tabName = CopilotCliInstaller.terminalTabName(),
             command = CopilotCliInstaller.installCommand(),
             errorTitle = "Install GitHub Copilot CLI",
-            openInEditor = false,
         )
     }
 
@@ -118,25 +70,15 @@ object CopilotCliLauncher {
         tabName: String,
         command: String,
         errorTitle: String,
-        openInEditor: Boolean,
     ) {
         try {
             val tab = TerminalToolWindowTabsManager.getInstance(project)
                 .createTabBuilder()
                 .workingDirectory(project.basePath)
                 .tabName(tabName)
-                // Avoid requestFocus(true) when we plan to move the tab to the editor.
-                // requestFocus(true) triggers an async toolWindow.activate() call, which races
-                // with our moveTabToEditor logic. When the Terminal tool window has never been
-                // opened, the lazy-init callbacks from activation can re-show the tab in the
-                // tool window after we've already opened it in the editor, resulting in the
-                // same session appearing in both places.
-                .requestFocus(!openInEditor)
+                .requestFocus(true)
                 .createTab()
             sendCommand(tab.view, command)
-            if (openInEditor) {
-                moveTabToEditor(project, tab)
-            }
         } catch (t: Throwable) {
             LOG.warn("Failed to open integrated terminal for: $command", t)
             Messages.showErrorDialog(
@@ -151,42 +93,5 @@ object CopilotCliLauncher {
         view.createSendTextBuilder()
             .shouldExecute()
             .send(command)
-    }
-
-    /**
-     * Detaches the freshly created terminal tab from the Terminal tool window and reopens it
-     * as a regular editor tab, by invoking the platform action `Terminal.MoveToEditor`.
-     *
-     * Uses [ToolWindow.activate] instead of [invokeLater] to guarantee the tool window is
-     * fully initialized before we detach. Without this, first-time lazy init of the Terminal
-     * tool window can race with detach, leaving the session in both places.
-     */
-    private fun moveTabToEditor(project: Project, tab: TerminalToolWindowTab) {
-        val action = ActionManager.getInstance().getAction(MOVE_TERMINAL_TO_EDITOR_ACTION_ID)
-        if (action == null) {
-            LOG.info("Action $MOVE_TERMINAL_TO_EDITOR_ACTION_ID not found, leaving terminal tab in tool window")
-            return
-        }
-        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TERMINAL_TOOL_WINDOW_ID)
-        if (toolWindow == null) {
-            LOG.info("Terminal tool window not found, leaving terminal tab in tool window")
-            return
-        }
-        // activate() ensures the tool window is fully initialized before running the callback.
-        // autoFocusContents=false avoids stealing focus from the editor tab we're about to open.
-        toolWindow.activate({
-            try {
-                toolWindow.contentManager.setSelectedContent(tab.content)
-                val dataContext = SimpleDataContext.builder()
-                    .add(CommonDataKeys.PROJECT, project)
-                    .add(PlatformDataKeys.TOOL_WINDOW, toolWindow)
-                    .add(PlatformDataKeys.TOOL_WINDOW_CONTENT_MANAGER, toolWindow.contentManager)
-                    .build()
-                val event = AnActionEvent.createEvent(action, dataContext, null, ActionPlaces.UNKNOWN, ActionUiKind.NONE, null)
-                ActionUtil.performAction(action, event)
-            } catch (t: Throwable) {
-                LOG.warn("Failed to move Copilot CLI terminal tab to editor", t)
-            }
-        }, false)
     }
 }
